@@ -4,7 +4,6 @@ from datetime import datetime, timedelta
 import json
 from pathlib import Path
 import requests
-import shutil
 
 # Page config
 st.set_page_config(
@@ -21,24 +20,12 @@ ANALYSIS_FILE = DATA_DIR / "analyses.json"
 # Get API key from Streamlit secrets or environment variable
 def get_api_key():
     try:
-        # Try Streamlit secrets first (for cloud deployment)
         api_key = st.secrets["PERPLEXITY_API_KEY"]
         return api_key
     except Exception as e:
-        # Fallback to environment variable (for local development)
         api_key = os.getenv("PERPLEXITY_API_KEY")
         if not api_key:
-            st.error("⚠️ API 키가 설정되지 않았습니다.")
-            st.info("""
-            **관리자에게 문의하세요:**
-            
-            Streamlit Cloud에서 다음과 같이 설정해야 합니다:
-            1. Settings → Secrets
-            2. 다음 내용 추가:
-            ```
-            PERPLEXITY_API_KEY = "pplx-your-api-key"
-            ```
-            """)
+            st.error("⚠️ 서비스 오류: 관리자에게 문의하세요.")
             st.stop()
         return api_key
 
@@ -53,12 +40,6 @@ def load_analyses():
 def save_analyses(analyses):
     with open(ANALYSIS_FILE, 'w', encoding='utf-8') as f:
         json.dump(analyses, f, ensure_ascii=False, indent=2)
-
-# Delete all analysis data
-def reset_all_data():
-    if ANALYSIS_FILE.exists():
-        ANALYSIS_FILE.unlink()
-    return True
 
 # Perplexity API call with enhanced prompt
 def analyze_stock_with_perplexity(ticker_or_name, api_key):
@@ -192,8 +173,8 @@ Do NOT include any explanatory text before or after the JSON. Return ONLY the JS
             {"role": "system", "content": "You are a precise financial analyst. You always find real data from web sources and never use placeholders or estimates. You search multiple sources until you find accurate information."},
             {"role": "user", "content": prompt}
         ],
-        "temperature": 0.1,  # Lower for more factual responses
-        "max_tokens": 5000,  # Increased for thorough analysis
+        "temperature": 0.1,
+        "max_tokens": 5000,
         "search_domain_filter": ["finance.yahoo.com", "finance.naver.com", "investing.com", "marketwatch.com"],
         "return_citations": True
     }
@@ -201,7 +182,6 @@ Do NOT include any explanatory text before or after the JSON. Return ONLY the JS
     try:
         response = requests.post(url, json=data, headers=headers, timeout=90)
         
-        # Detailed error handling
         if response.status_code != 200:
             error_detail = f"Status: {response.status_code}"
             try:
@@ -213,43 +193,28 @@ Do NOT include any explanatory text before or after the JSON. Return ONLY the JS
             st.error(f"❌ API 요청 실패")
             with st.expander("🔍 상세 오류 내용 보기"):
                 st.code(error_detail)
-                
-                if response.status_code == 401:
-                    st.warning("🔑 API 키가 유효하지 않습니다. Streamlit Secrets 설정을 확인하세요.")
-                elif response.status_code == 400:
-                    st.warning("⚠️ 요청 형식에 문제가 있습니다.")
             return None
         
         result = response.json()
-        
-        # Extract JSON from response
         content = result['choices'][0]['message']['content']
-        
-        # Display citations if available
-        if 'citations' in result:
-            st.sidebar.success(f"📚 {len(result['citations'])}개 데이터 소스 사용")
         
         # Try to parse JSON from the content
         import re
         
-        # First try: direct JSON parse
         try:
             analysis_data = json.loads(content)
             return analysis_data
         except:
-            # Second try: extract JSON from markdown code block
             json_match = re.search(r'```(?:json)?\s*({[\s\S]*?})\s*```', content)
             if json_match:
                 analysis_data = json.loads(json_match.group(1))
                 return analysis_data
             
-            # Third try: find any JSON object
             json_match = re.search(r'\{[\s\S]*\}', content)
             if json_match:
                 analysis_data = json.loads(json_match.group())
                 return analysis_data
             
-            # If all fails, show the raw response
             st.error("❌ JSON 파싱 실패")
             with st.expander("🔍 AI 응답 내용 보기"):
                 st.code(content)
@@ -274,25 +239,6 @@ st.markdown("---")
 
 # Get API key
 API_KEY = get_api_key()
-
-if API_KEY:
-    # Show API key status (masked)
-    with st.sidebar:
-        st.success(f"✅ API 키 설정 완료")
-        st.caption(f"Key: {API_KEY[:8]}...{API_KEY[-4:]}")
-        st.info("💰 사용 모델: **sonar** (가장 저렴하고 빠른 모델)")
-        
-        st.markdown("---")
-        st.subheader("🗑️ 데이터 관리")
-        
-        # Count existing analyses
-        analyses_count = len(load_analyses())
-        st.metric("저장된 분석", f"{analyses_count}개")
-        
-        if st.button("🗑️ 모든 분석 데이터 삭제", type="secondary", use_container_width=True):
-            if reset_all_data():
-                st.success("✅ 모든 분석 데이터가 삭제되었습니다!")
-                st.rerun()
 
 # Main content
 tab1, tab2 = st.tabs(["📈 종목 분석", "🏆 전체 랭킹"])
@@ -323,7 +269,6 @@ with tab1:
             
             if days_old < 7:
                 st.info(f"📋 기존 분석 결과 사용 (분석일: {last_analysis_date.strftime('%Y-%m-%d %H:%M')})")
-                st.warning("🔄 새로운 데이터로 다시 분석하려면 사이드바에서 '모든 분석 데이터 삭제'를 먼저 누르세요.")
                 analysis_result = existing['data']
             else:
                 st.warning(f"🔄 마지막 분석이 {days_old}일 전입니다. 새로운 분석을 진행합니다.")
@@ -449,4 +394,4 @@ with tab2:
 
 # Footer
 st.markdown("---")
-st.caption("⚡ Powered by Perplexity AI (sonar model) | 데이터는 최대 7일간 캐시됩니다. | 실제 재무 데이터 기반 분석")
+st.caption("⚡ Powered by Perplexity AI | 데이터는 최대 7일간 캐시됩니다. | 실제 재무 데이터 기반 분석")
