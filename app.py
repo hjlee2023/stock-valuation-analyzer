@@ -445,4 +445,4 @@ with tab2:
 
 # Footer
 st.markdown("---")
-st.caption("⚡ Powered by Perplexity AI Sonar-Pro | 한국 주식은 네이버금융 우선 검색 | 데이터는 최대 7일간 캐시 | 실제 재무 데이터 기반 분석")
+st.caption("⚡ Powered by Perplexity AI Sonar-Pro | 데이터는 최대 7일간 캐시 | 실제 재무 데이터 기반 분석")
