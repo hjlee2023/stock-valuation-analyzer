@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import json
 from pathlib import Path
 import requests
+import shutil
 
 # Page config
 st.set_page_config(
@@ -53,103 +54,130 @@ def save_analyses(analyses):
     with open(ANALYSIS_FILE, 'w', encoding='utf-8') as f:
         json.dump(analyses, f, ensure_ascii=False, indent=2)
 
-# Perplexity API call
+# Delete all analysis data
+def reset_all_data():
+    if ANALYSIS_FILE.exists():
+        ANALYSIS_FILE.unlink()
+    return True
+
+# Perplexity API call with enhanced prompt
 def analyze_stock_with_perplexity(ticker_or_name, api_key):
     url = "https://api.perplexity.ai/chat/completions"
     
+    # Enhanced prompt with strict data requirements
     prompt = f"""
-다음 평가 기준에 따라 '{ticker_or_name}' 종목을 분석하고 점수를 매겨주세요.
+You are a financial analyst. Analyze the stock '{ticker_or_name}' and provide accurate financial data.
 
-평가 항목:
-1. Trailing PER
-   - 5 미만: 20점
-   - 5 이상 8 미만: 15점
-   - 8 이상 10 미만: 10점
-   - 10 이상: 5점
+**CRITICAL INSTRUCTIONS:**
+1. You MUST search the web for REAL, ACTUAL financial data from reliable sources (Yahoo Finance, Google Finance, Bloomberg, company investor relations, stock exchanges)
+2. NEVER say "data not available" or use estimates - if you cannot find real data, search harder using different queries
+3. For Korean stocks, search Korean financial sites (Naver Finance, KRX, company IR pages)
+4. For international stocks, use Yahoo Finance, Google Finance, or company official sites
+5. All numerical values must be based on actual reported data, not estimates
 
-2. 직전 분기 PBR
-   - 0.3 미만: 5점
-   - 0.3 이상 0.6 미만: 4점
-   - 0.6 이상 1.0 미만: 3점
-   - 1.0 이상: 0점
+**Required Data Points:**
+1. **Trailing P/E Ratio (PER)**: Find from latest financial reports or stock data sites
+2. **Price-to-Book Ratio (PBR)**: Most recent quarter data
+3. **Dividend Yield (%)**: Annual dividend / current stock price
+4. **Dividend History**: Check last 10 years of dividend payments
+5. **Share Buyback**: Search for share repurchase announcements
+6. **Treasury Stock Ratio**: Check company financial statements
 
-3. 이익 지속 가능성 (정성적 판단)
-   - 대체로 지속 가능: 5점
-   - 불안정한 이익 창출력: 0점
+**Scoring Criteria:**
 
-4. 중복 상장 여부 (자회사/손자회사 상장 여부)
-   - 중복상장: 0점
-   - 단독상장: 5점
+1. Trailing PER:
+   - Below 5: 20 points
+   - 5-8: 15 points
+   - 8-10: 10 points
+   - Above 10: 5 points
 
-5. 배당수익률
-   - 7% 초과: 10점
-   - 5% 초과 7% 이하: 7점
-   - 3% 초과 5% 이하: 5점
-   - 3% 이하: 2점
+2. Latest Quarter PBR:
+   - Below 0.3: 5 points
+   - 0.3-0.6: 4 points
+   - 0.6-1.0: 3 points
+   - Above 1.0: 0 points
 
-6. 분기 배당 실시 여부
-   - 예: 5점
-   - 아니요: 0점
+3. Profit Sustainability (qualitative):
+   - Sustainable: 5 points
+   - Unstable: 0 points
 
-7. 배당 연속 인상 연수
-   - 10년 이상: 5점
-   - 5년 이상: 4점
-   - 3년 이상: 3점
-   - 해당 없음: 0점
+4. Duplicate Listing (subsidiaries listed):
+   - No: 5 points
+   - Yes: 0 points
 
-8. 정기적 자사주 매입 및 소각 여부 (연 1회 이상)
-   - 예: 7점
-   - 아니요: 0점
+5. Dividend Yield:
+   - Above 7%: 10 points
+   - 5-7%: 7 points
+   - 3-5%: 5 points
+   - Below 3%: 2 points
 
-9. 연간 자사주 소각 비율 (총주식수 대비)
-   - 2% 초과: 8점
-   - 1.5% 초과 2% 이하: 5점
-   - 0.5% 초과 1.5% 이하: 3점
-   - 0.5% 이하: 0점
+6. Quarterly Dividends:
+   - Yes: 5 points
+   - No: 0 points
 
-10. 자사주 보유 비율
-    - 없음: 5점
-    - 2% 미만: 4점
-    - 2% 이상 5% 미만: 2점
-    - 5% 이상: 0점
+7. Consecutive Dividend Increases:
+   - 10+ years: 5 points
+   - 5+ years: 4 points
+   - 3+ years: 3 points
+   - None: 0 points
 
-11. 미래 성장 잠재력 (정성적 판단)
-    - 매우 높다: 10점
-    - 높다: 7점
-    - 보통: 5점
-    - 낮다: 3점
+8. Regular Buybacks (at least annual):
+   - Yes: 7 points
+   - No: 0 points
 
-12. 기업 경영 (경영자 평가)
-    - 우수한 경영자: 10점
-    - 전문 경영자: 5점
-    - 저조한 실적의 오너 경영: 0점
+9. Annual Buyback Ratio (% of total shares):
+   - Above 2%: 8 points
+   - 1.5-2%: 5 points
+   - 0.5-1.5%: 3 points
+   - Below 0.5%: 0 points
 
-13. 세계적 브랜드 보유 여부
-    - 있다: 5점
-    - 없다: 0점
+10. Treasury Stock Ratio:
+    - None: 5 points
+    - Below 2%: 4 points
+    - 2-5%: 2 points
+    - Above 5%: 0 points
 
-반드시 다음 JSON 형식으로만 답변하세요. 다른 설명 없이 JSON만 반환하세요:
+11. Future Growth Potential (qualitative):
+    - Very High: 10 points
+    - High: 7 points
+    - Medium: 5 points
+    - Low: 3 points
+
+12. Management Quality (qualitative):
+    - Excellent: 10 points
+    - Professional: 5 points
+    - Poor: 0 points
+
+13. Global Brand:
+    - Yes: 5 points
+    - No: 0 points
+
+**IMPORTANT: Response Format**
+Return ONLY a valid JSON object with this exact structure:
+
 {{
-  "company_name": "회사명",
-  "ticker": "티커",
+  "company_name": "Exact company name",
+  "ticker": "Stock ticker symbol",
   "scores": {{
-    "1_trailing_per": {{"value": "10.5", "score": 10, "reason": "간단한 설명"}},
-    "2_pbr": {{"value": "0.8", "score": 3, "reason": "간단한 설명"}},
-    "3_profit_sustainability": {{"score": 5, "reason": "판단 근거"}},
-    "4_duplicate_listing": {{"score": 5, "reason": "판단 근거"}},
-    "5_dividend_yield": {{"value": "3.5%", "score": 5, "reason": "간단한 설명"}},
-    "6_quarterly_dividend": {{"score": 0, "reason": "판단 근거"}},
-    "7_dividend_increase_years": {{"value": "5년", "score": 4, "reason": "간단한 설명"}},
-    "8_buyback_cancellation": {{"score": 7, "reason": "판단 근거"}},
-    "9_cancellation_ratio": {{"value": "1.2%", "score": 3, "reason": "간단한 설명"}},
-    "10_treasury_stock": {{"value": "1.5%", "score": 4, "reason": "간단한 설명"}},
-    "11_growth_potential": {{"score": 7, "reason": "판단 근거"}},
-    "12_management": {{"score": 10, "reason": "판단 근거"}},
-    "13_global_brand": {{"score": 5, "reason": "판단 근거"}}
+    "1_trailing_per": {{"value": "actual number", "score": number, "reason": "Data source: [source name]"}},
+    "2_pbr": {{"value": "actual number", "score": number, "reason": "Data source: [source name]"}},
+    "3_profit_sustainability": {{"score": number, "reason": "Brief explanation"}},
+    "4_duplicate_listing": {{"score": number, "reason": "List subsidiary names or state 'None'"}},
+    "5_dividend_yield": {{"value": "actual %", "score": number, "reason": "Data source: [source name]"}},
+    "6_quarterly_dividend": {{"score": number, "reason": "Yes/No with evidence"}},
+    "7_dividend_increase_years": {{"value": "X years", "score": number, "reason": "Dividend history data"}},
+    "8_buyback_cancellation": {{"score": number, "reason": "Recent buyback announcements or None"}},
+    "9_cancellation_ratio": {{"value": "actual %", "score": number, "reason": "Data source or N/A"}},
+    "10_treasury_stock": {{"value": "actual %", "score": number, "reason": "Data source: [source name]"}},
+    "11_growth_potential": {{"score": number, "reason": "Business outlook analysis"}},
+    "12_management": {{"score": number, "reason": "Management assessment"}},
+    "13_global_brand": {{"score": number, "reason": "Brand recognition level"}}
   }},
-  "total_score": 68,
-  "analysis_summary": "전체 종합 평가 (3-4문장)"
+  "total_score": total_sum,
+  "analysis_summary": "3-4 sentence comprehensive evaluation"
 }}
+
+Do NOT include any explanatory text before or after the JSON. Return ONLY the JSON object.
 """
     
     headers = {
@@ -157,19 +185,21 @@ def analyze_stock_with_perplexity(ticker_or_name, api_key):
         "Content-Type": "application/json"
     }
     
-    # Use sonar model - the default, fast, and cost-effective option
+    # Use sonar model with increased tokens for thorough research
     data = {
         "model": "sonar",
         "messages": [
-            {"role": "system", "content": "당신은 금융 분석 전문가입니다. 최신 재무 데이터를 기반으로 정확한 분석을 JSON 형식으로만 제공합니다."},
+            {"role": "system", "content": "You are a precise financial analyst. You always find real data from web sources and never use placeholders or estimates. You search multiple sources until you find accurate information."},
             {"role": "user", "content": prompt}
         ],
-        "temperature": 0.2,
-        "max_tokens": 4000
+        "temperature": 0.1,  # Lower for more factual responses
+        "max_tokens": 5000,  # Increased for thorough analysis
+        "search_domain_filter": ["finance.yahoo.com", "finance.naver.com", "investing.com", "marketwatch.com"],
+        "return_citations": True
     }
     
     try:
-        response = requests.post(url, json=data, headers=headers, timeout=60)
+        response = requests.post(url, json=data, headers=headers, timeout=90)
         
         # Detailed error handling
         if response.status_code != 200:
@@ -194,6 +224,10 @@ def analyze_stock_with_perplexity(ticker_or_name, api_key):
         
         # Extract JSON from response
         content = result['choices'][0]['message']['content']
+        
+        # Display citations if available
+        if 'citations' in result:
+            st.sidebar.success(f"📚 {len(result['citations'])}개 데이터 소스 사용")
         
         # Try to parse JSON from the content
         import re
@@ -222,7 +256,7 @@ def analyze_stock_with_perplexity(ticker_or_name, api_key):
             return None
             
     except requests.exceptions.Timeout:
-        st.error("⏱️ 요청 시간 초과 (60초). 다시 시도해주세요.")
+        st.error("⏱️ 요청 시간 초과 (90초). 다시 시도해주세요.")
         return None
     except requests.exceptions.RequestException as e:
         st.error(f"🌐 네트워크 오류: {str(e)}")
@@ -247,6 +281,18 @@ if API_KEY:
         st.success(f"✅ API 키 설정 완료")
         st.caption(f"Key: {API_KEY[:8]}...{API_KEY[-4:]}")
         st.info("💰 사용 모델: **sonar** (가장 저렴하고 빠른 모델)")
+        
+        st.markdown("---")
+        st.subheader("🗑️ 데이터 관리")
+        
+        # Count existing analyses
+        analyses_count = len(load_analyses())
+        st.metric("저장된 분석", f"{analyses_count}개")
+        
+        if st.button("🗑️ 모든 분석 데이터 삭제", type="secondary", use_container_width=True):
+            if reset_all_data():
+                st.success("✅ 모든 분석 데이터가 삭제되었습니다!")
+                st.rerun()
 
 # Main content
 tab1, tab2 = st.tabs(["📈 종목 분석", "🏆 전체 랭킹"])
@@ -256,7 +302,7 @@ with tab1:
     
     col1, col2 = st.columns([3, 1])
     with col1:
-        ticker_input = st.text_input("종목명 또는 티커를 입력하세요", placeholder="예: 삼성전자, 005930, AAPL")
+        ticker_input = st.text_input("종목명 또는 티커를 입력하세요", placeholder="예: 삼성전자, 005930, AAPL, 페트로브라스")
     with col2:
         st.markdown("<br>", unsafe_allow_html=True)
         analyze_btn = st.button("🔍 분석 시작", type="primary", use_container_width=True)
@@ -277,10 +323,11 @@ with tab1:
             
             if days_old < 7:
                 st.info(f"📋 기존 분석 결과 사용 (분석일: {last_analysis_date.strftime('%Y-%m-%d %H:%M')})")
+                st.warning("🔄 새로운 데이터로 다시 분석하려면 사이드바에서 '모든 분석 데이터 삭제'를 먼저 누르세요.")
                 analysis_result = existing['data']
             else:
                 st.warning(f"🔄 마지막 분석이 {days_old}일 전입니다. 새로운 분석을 진행합니다.")
-                with st.spinner('🤖 AI가 종목을 분석하고 있습니다... (약 20-40초 소요)'):
+                with st.spinner('🤖 AI가 실제 재무 데이터를 검색하고 분석하고 있습니다... (약 30-60초 소요)'):
                     analysis_result = analyze_stock_with_perplexity(ticker_input, API_KEY)
                     
                     if analysis_result:
@@ -292,7 +339,7 @@ with tab1:
                         save_analyses(analyses)
                         st.success("✅ 분석 완료 및 저장됨")
         else:
-            with st.spinner('🤖 AI가 종목을 분석하고 있습니다... (약 20-40초 소요)'):
+            with st.spinner('🤖 AI가 실제 재무 데이터를 검색하고 분석하고 있습니다... (약 30-60초 소요)'):
                 analysis_result = analyze_stock_with_perplexity(ticker_input, API_KEY)
                 
                 if analysis_result:
@@ -402,4 +449,4 @@ with tab2:
 
 # Footer
 st.markdown("---")
-st.caption("⚡ Powered by Perplexity AI (sonar model) | 데이터는 최대 7일간 캐시됩니다.")
+st.caption("⚡ Powered by Perplexity AI (sonar model) | 데이터는 최대 7일간 캐시됩니다. | 실제 재무 데이터 기반 분석")
