@@ -21,12 +21,23 @@ ANALYSIS_FILE = DATA_DIR / "analyses.json"
 def get_api_key():
     try:
         # Try Streamlit secrets first (for cloud deployment)
-        return st.secrets["PERPLEXITY_API_KEY"]
-    except:
+        api_key = st.secrets["PERPLEXITY_API_KEY"]
+        return api_key
+    except Exception as e:
         # Fallback to environment variable (for local development)
         api_key = os.getenv("PERPLEXITY_API_KEY")
         if not api_key:
-            st.error("⚠️ API 키가 설정되지 않았습니다. 관리자에게 문의하세요.")
+            st.error("⚠️ API 키가 설정되지 않았습니다.")
+            st.info("""
+            **관리자에게 문의하세요:**
+            
+            Streamlit Cloud에서 다음과 같이 설정해야 합니다:
+            1. Settings → Secrets
+            2. 다음 내용 추가:
+            ```
+            PERPLEXITY_API_KEY = "pplx-your-api-key"
+            ```
+            """)
             st.stop()
         return api_key
 
@@ -117,26 +128,26 @@ def analyze_stock_with_perplexity(ticker_or_name, api_key):
     - 있다: 5점
     - 없다: 0점
 
-다음 JSON 형식으로 정확하게 답변해주세요:
+반드시 다음 JSON 형식으로만 답변하세요. 다른 설명 없이 JSON만 반환하세요:
 {{
   "company_name": "회사명",
   "ticker": "티커",
   "scores": {{
-    "1_trailing_per": {{"value": "실제값", "score": 점수, "reason": "간단한 설명"}},
-    "2_pbr": {{"value": "실제값", "score": 점수, "reason": "간단한 설명"}},
-    "3_profit_sustainability": {{"score": 점수, "reason": "판단 근거"}},
-    "4_duplicate_listing": {{"score": 점수, "reason": "판단 근거"}},
-    "5_dividend_yield": {{"value": "실제값", "score": 점수, "reason": "간단한 설명"}},
-    "6_quarterly_dividend": {{"score": 점수, "reason": "판단 근거"}},
-    "7_dividend_increase_years": {{"value": "연수", "score": 점수, "reason": "간단한 설명"}},
-    "8_buyback_cancellation": {{"score": 점수, "reason": "판단 근거"}},
-    "9_cancellation_ratio": {{"value": "실제값", "score": 점수, "reason": "간단한 설명"}},
-    "10_treasury_stock": {{"value": "실제값", "score": 점수, "reason": "간단한 설명"}},
-    "11_growth_potential": {{"score": 점수, "reason": "판단 근거"}},
-    "12_management": {{"score": 점수, "reason": "판단 근거"}},
-    "13_global_brand": {{"score": 점수, "reason": "판단 근거"}}
+    "1_trailing_per": {{"value": "10.5", "score": 10, "reason": "간단한 설명"}},
+    "2_pbr": {{"value": "0.8", "score": 3, "reason": "간단한 설명"}},
+    "3_profit_sustainability": {{"score": 5, "reason": "판단 근거"}},
+    "4_duplicate_listing": {{"score": 5, "reason": "판단 근거"}},
+    "5_dividend_yield": {{"value": "3.5%", "score": 5, "reason": "간단한 설명"}},
+    "6_quarterly_dividend": {{"score": 0, "reason": "판단 근거"}},
+    "7_dividend_increase_years": {{"value": "5년", "score": 4, "reason": "간단한 설명"}},
+    "8_buyback_cancellation": {{"score": 7, "reason": "판단 근거"}},
+    "9_cancellation_ratio": {{"value": "1.2%", "score": 3, "reason": "간단한 설명"}},
+    "10_treasury_stock": {{"value": "1.5%", "score": 4, "reason": "간단한 설명"}},
+    "11_growth_potential": {{"score": 7, "reason": "판단 근거"}},
+    "12_management": {{"score": 10, "reason": "판단 근거"}},
+    "13_global_brand": {{"score": 5, "reason": "판단 근거"}}
   }},
-  "total_score": 총점,
+  "total_score": 68,
   "analysis_summary": "전체 종합 평가 (3-4문장)"
 }}
 """
@@ -149,7 +160,7 @@ def analyze_stock_with_perplexity(ticker_or_name, api_key):
     data = {
         "model": "llama-3.1-sonar-large-128k-online",
         "messages": [
-            {"role": "system", "content": "당신은 금융 분석 전문가입니다. 최신 재무 데이터를 기반으로 정확한 분석을 제공합니다."},
+            {"role": "system", "content": "당신은 금융 분석 전문가입니다. 최신 재무 데이터를 기반으로 정확한 분석을 JSON 형식으로만 제공합니다."},
             {"role": "user", "content": prompt}
         ],
         "temperature": 0.2,
@@ -157,8 +168,27 @@ def analyze_stock_with_perplexity(ticker_or_name, api_key):
     }
     
     try:
-        response = requests.post(url, json=data, headers=headers)
-        response.raise_for_status()
+        response = requests.post(url, json=data, headers=headers, timeout=60)
+        
+        # Detailed error handling
+        if response.status_code != 200:
+            error_detail = f"Status: {response.status_code}"
+            try:
+                error_json = response.json()
+                error_detail += f"\n{json.dumps(error_json, indent=2)}"
+            except:
+                error_detail += f"\n{response.text}"
+            
+            st.error(f"❌ API 요청 실패")
+            with st.expander("🔍 상세 오류 내용 보기"):
+                st.code(error_detail)
+                
+                if response.status_code == 401:
+                    st.warning("🔑 API 키가 유효하지 않습니다. Streamlit Secrets 설정을 확인하세요.")
+                elif response.status_code == 400:
+                    st.warning("⚠️ 요청 형식에 문제가 있습니다.")
+            return None
+        
         result = response.json()
         
         # Extract JSON from response
@@ -166,16 +196,41 @@ def analyze_stock_with_perplexity(ticker_or_name, api_key):
         
         # Try to parse JSON from the content
         import re
-        json_match = re.search(r'\{[\s\S]*\}', content)
-        if json_match:
-            analysis_data = json.loads(json_match.group())
+        
+        # First try: direct JSON parse
+        try:
+            analysis_data = json.loads(content)
             return analysis_data
-        else:
-            st.error("JSON 파싱 실패")
+        except:
+            # Second try: extract JSON from markdown code block
+            json_match = re.search(r'```(?:json)?\s*({[\s\S]*?})\s*```', content)
+            if json_match:
+                analysis_data = json.loads(json_match.group(1))
+                return analysis_data
+            
+            # Third try: find any JSON object
+            json_match = re.search(r'\{[\s\S]*\}', content)
+            if json_match:
+                analysis_data = json.loads(json_match.group())
+                return analysis_data
+            
+            # If all fails, show the raw response
+            st.error("❌ JSON 파싱 실패")
+            with st.expander("🔍 AI 응답 내용 보기"):
+                st.code(content)
             return None
             
+    except requests.exceptions.Timeout:
+        st.error("⏱️ 요청 시간 초과 (60초). 다시 시도해주세요.")
+        return None
+    except requests.exceptions.RequestException as e:
+        st.error(f"🌐 네트워크 오류: {str(e)}")
+        return None
     except Exception as e:
-        st.error(f"API 호출 오류: {str(e)}")
+        st.error(f"❌ 예상치 못한 오류: {str(e)}")
+        import traceback
+        with st.expander("🔍 상세 오류 로그"):
+            st.code(traceback.format_exc())
         return None
 
 # Main app
@@ -185,6 +240,12 @@ st.markdown("---")
 # Get API key
 API_KEY = get_api_key()
 
+if API_KEY:
+    # Show API key status (masked)
+    with st.sidebar:
+        st.success(f"✅ API 키 설정 완료")
+        st.caption(f"Key: {API_KEY[:8]}...{API_KEY[-4:]}")
+
 # Main content
 tab1, tab2 = st.tabs(["📈 종목 분석", "🏆 전체 랭킹"])
 
@@ -193,7 +254,7 @@ with tab1:
     
     col1, col2 = st.columns([3, 1])
     with col1:
-        ticker_input = st.text_input("종목명 또는 티커를 입력하세요", placeholder="예: 삼성전자, 005930")
+        ticker_input = st.text_input("종목명 또는 티커를 입력하세요", placeholder="예: 삼성전자, 005930, AAPL")
     with col2:
         st.markdown("<br>", unsafe_allow_html=True)
         analyze_btn = st.button("🔍 분석 시작", type="primary", use_container_width=True)
@@ -206,16 +267,18 @@ with tab1:
         ticker_key = ticker_input.strip().upper()
         existing = analyses.get(ticker_key)
         
+        analysis_result = None
+        
         if existing:
             last_analysis_date = datetime.fromisoformat(existing['timestamp'])
             days_old = (datetime.now() - last_analysis_date).days
             
             if days_old < 7:
-                st.info(f"📋 기존 분석 결과 (분석일: {last_analysis_date.strftime('%Y-%m-%d')})")
+                st.info(f"📋 기존 분석 결과 사용 (분석일: {last_analysis_date.strftime('%Y-%m-%d %H:%M')})")
                 analysis_result = existing['data']
             else:
                 st.warning(f"🔄 마지막 분석이 {days_old}일 전입니다. 새로운 분석을 진행합니다.")
-                with st.spinner('🤖 AI가 종목을 분석하고 있습니다...'):
+                with st.spinner('🤖 AI가 종목을 분석하고 있습니다... (약 30-60초 소요)'):
                     analysis_result = analyze_stock_with_perplexity(ticker_input, API_KEY)
                     
                     if analysis_result:
@@ -225,8 +288,9 @@ with tab1:
                             'data': analysis_result
                         }
                         save_analyses(analyses)
+                        st.success("✅ 분석 완료 및 저장됨")
         else:
-            with st.spinner('🤖 AI가 종목을 분석하고 있습니다...'):
+            with st.spinner('🤖 AI가 종목을 분석하고 있습니다... (약 30-60초 소요)'):
                 analysis_result = analyze_stock_with_perplexity(ticker_input, API_KEY)
                 
                 if analysis_result:
@@ -236,6 +300,7 @@ with tab1:
                         'data': analysis_result
                     }
                     save_analyses(analyses)
+                    st.success("✅ 분석 완료 및 저장됨")
         
         # Display results
         if analysis_result:
