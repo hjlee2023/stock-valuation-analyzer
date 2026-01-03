@@ -45,24 +45,47 @@ def save_analyses(analyses):
 def analyze_stock_with_perplexity(ticker_or_name, api_key):
     url = "https://api.perplexity.ai/chat/completions"
     
-    # Enhanced prompt with strict data requirements
+    # Enhanced prompt with STRICT data requirements
     prompt = f"""
 You are a financial analyst. Analyze the stock '{ticker_or_name}' and provide accurate financial data.
 
-**CRITICAL INSTRUCTIONS:**
-1. You MUST search the web for REAL, ACTUAL financial data from reliable sources (Yahoo Finance, Google Finance, Bloomberg, company investor relations, stock exchanges)
-2. NEVER say "data not available" or use estimates - if you cannot find real data, search harder using different queries
-3. For Korean stocks, search Korean financial sites (Naver Finance, KRX, company IR pages)
-4. For international stocks, use Yahoo Finance, Google Finance, or company official sites
-5. All numerical values must be based on actual reported data, not estimates
+**CRITICAL INSTRUCTIONS - READ CAREFULLY:**
+
+1. **DATA SOURCES ARE MANDATORY:**
+   - You MUST search the web for REAL, ACTUAL financial data
+   - Primary sources: Yahoo Finance, Google Finance, Bloomberg, Seeking Alpha, company IR pages, stock exchanges
+   - For Korean stocks: Naver Finance (finance.naver.com), KRX, company IR pages
+   - For Brazilian stocks: B3 exchange, Investing.com, Yahoo Finance
+   - For US stocks: Yahoo Finance, SEC filings, company investor relations
+
+2. **NEVER SAY "DATA NOT AVAILABLE":**
+   - For well-known publicly traded companies (like Pfizer, Apple, Microsoft, Samsung, Petrobras, etc.), ALL financial data EXISTS
+   - If you cannot find data on first search, try different queries and sources
+   - Dividend information for major dividend-paying stocks ALWAYS exists
+   - P/E and P/B ratios for any listed company ALWAYS exist on financial sites
+
+3. **SPECIFIC DATA REQUIREMENTS:**
+   - **Trailing P/E (PER)**: Check Yahoo Finance, Google Finance - this data exists for ALL public companies
+   - **Price-to-Book (PBR)**: Available on all major financial sites
+   - **Dividend Yield**: If company pays dividends, this data is readily available
+   - **Dividend Frequency**: Search "[company name] dividend payment schedule" - quarterly/annual info always exists for dividend payers
+   - **Dividend History**: Search company IR page or dividend history sites
+   - **Share Buybacks**: Search recent company announcements and SEC filings
+
+4. **QUALITY CHECKS:**
+   - All numerical values MUST be actual reported data with sources
+   - Do NOT use estimates, placeholders, or say "not specified"
+   - Cite the specific website/source where you found each data point
 
 **Required Data Points:**
-1. **Trailing P/E Ratio (PER)**: Find from latest financial reports or stock data sites
-2. **Price-to-Book Ratio (PBR)**: Most recent quarter data
-3. **Dividend Yield (%)**: Annual dividend / current stock price
-4. **Dividend History**: Check last 10 years of dividend payments
-5. **Share Buyback**: Search for share repurchase announcements
-6. **Treasury Stock Ratio**: Check company financial statements
+
+1. **Trailing P/E Ratio (PER)**: Current P/E from financial data sites (Yahoo Finance, Google Finance, etc.)
+2. **Price-to-Book Ratio (PBR)**: Most recent quarter from financial sites
+3. **Dividend Yield (%)**: Annual dividend / current stock price (if dividend-paying)
+4. **Dividend Frequency**: Quarterly/Annual/Semi-annual (MUST be specified for dividend-paying stocks)
+5. **Dividend History**: Check last 10 years - has dividend increased, stayed flat, or decreased?
+6. **Share Buyback Programs**: Recent announcements from company or financial news
+7. **Treasury Stock Ratio**: From company balance sheet or financial statements
 
 **Scoring Criteria:**
 
@@ -78,11 +101,11 @@ You are a financial analyst. Analyze the stock '{ticker_or_name}' and provide ac
    - 0.6-1.0: 3 points
    - Above 1.0: 0 points
 
-3. Profit Sustainability (qualitative):
+3. Profit Sustainability (qualitative analysis):
    - Sustainable: 5 points
    - Unstable: 0 points
 
-4. Duplicate Listing (subsidiaries listed):
+4. Duplicate Listing (subsidiaries also listed):
    - No: 5 points
    - Yes: 0 points
 
@@ -91,10 +114,11 @@ You are a financial analyst. Analyze the stock '{ticker_or_name}' and provide ac
    - 5-7%: 7 points
    - 3-5%: 5 points
    - Below 3%: 2 points
+   - No dividend: 0 points
 
 6. Quarterly Dividends:
-   - Yes: 5 points
-   - No: 0 points
+   - Yes (pays quarterly): 5 points
+   - No (annual or no dividend): 0 points
 
 7. Consecutive Dividend Increases:
    - 10+ years: 5 points
@@ -106,14 +130,14 @@ You are a financial analyst. Analyze the stock '{ticker_or_name}' and provide ac
    - Yes: 7 points
    - No: 0 points
 
-9. Annual Buyback Ratio (% of total shares):
+9. Annual Buyback Ratio (% of total shares cancelled):
    - Above 2%: 8 points
    - 1.5-2%: 5 points
    - 0.5-1.5%: 3 points
-   - Below 0.5%: 0 points
+   - Below 0.5% or none: 0 points
 
 10. Treasury Stock Ratio:
-    - None: 5 points
+    - None (0%): 5 points
     - Below 2%: 4 points
     - 2-5%: 2 points
     - Above 5%: 0 points
@@ -130,35 +154,40 @@ You are a financial analyst. Analyze the stock '{ticker_or_name}' and provide ac
     - Poor: 0 points
 
 13. Global Brand:
-    - Yes: 5 points
+    - Yes (internationally recognized): 5 points
     - No: 0 points
 
-**IMPORTANT: Response Format**
-Return ONLY a valid JSON object with this exact structure:
+**RESPONSE FORMAT - STRICT JSON ONLY:**
+
+Return ONLY this JSON structure with NO additional text:
 
 {{
-  "company_name": "Exact company name",
+  "company_name": "Full official company name",
   "ticker": "Stock ticker symbol",
   "scores": {{
-    "1_trailing_per": {{"value": "actual number", "score": number, "reason": "Data source: [source name]"}},
-    "2_pbr": {{"value": "actual number", "score": number, "reason": "Data source: [source name]"}},
-    "3_profit_sustainability": {{"score": number, "reason": "Brief explanation"}},
-    "4_duplicate_listing": {{"score": number, "reason": "List subsidiary names or state 'None'"}},
-    "5_dividend_yield": {{"value": "actual %", "score": number, "reason": "Data source: [source name]"}},
-    "6_quarterly_dividend": {{"score": number, "reason": "Yes/No with evidence"}},
-    "7_dividend_increase_years": {{"value": "X years", "score": number, "reason": "Dividend history data"}},
-    "8_buyback_cancellation": {{"score": number, "reason": "Recent buyback announcements or None"}},
-    "9_cancellation_ratio": {{"value": "actual %", "score": number, "reason": "Data source or N/A"}},
-    "10_treasury_stock": {{"value": "actual %", "score": number, "reason": "Data source: [source name]"}},
-    "11_growth_potential": {{"score": number, "reason": "Business outlook analysis"}},
-    "12_management": {{"score": number, "reason": "Management assessment"}},
-    "13_global_brand": {{"score": number, "reason": "Brand recognition level"}}
+    "1_trailing_per": {{"value": "actual number from [source]", "score": number, "reason": "Source: [specific website]"}},
+    "2_pbr": {{"value": "actual number from [source]", "score": number, "reason": "Source: [specific website]"}},
+    "3_profit_sustainability": {{"score": number, "reason": "Analysis of business model stability"}},
+    "4_duplicate_listing": {{"score": number, "reason": "List any subsidiaries or state 'None'"}},
+    "5_dividend_yield": {{"value": "X.XX% from [source]", "score": number, "reason": "Source: [specific website]"}},
+    "6_quarterly_dividend": {{"score": number, "reason": "Pays quarterly/annual/none - Source: [website]"}},
+    "7_dividend_increase_years": {{"value": "X years", "score": number, "reason": "Dividend history from [source]"}},
+    "8_buyback_cancellation": {{"score": number, "reason": "Recent buyback info or None"}},
+    "9_cancellation_ratio": {{"value": "X.X% or N/A", "score": number, "reason": "Data from [source] or N/A"}},
+    "10_treasury_stock": {{"value": "X.X% from [source]", "score": number, "reason": "Source: [specific website]"}},
+    "11_growth_potential": {{"score": number, "reason": "Growth outlook analysis"}},
+    "12_management": {{"score": number, "reason": "Management quality assessment"}},
+    "13_global_brand": {{"score": number, "reason": "Brand recognition assessment"}}
   }},
-  "total_score": total_sum,
-  "analysis_summary": "3-4 sentence comprehensive evaluation"
+  "total_score": sum_of_all_scores,
+  "analysis_summary": "3-4 sentence comprehensive evaluation with key findings"
 }}
 
-Do NOT include any explanatory text before or after the JSON. Return ONLY the JSON object.
+**FINAL REMINDER:**
+- For major stocks like Pfizer, Samsung, Apple, Microsoft, Petrobras, etc., saying "data not available" is UNACCEPTABLE
+- ALL data points can be found with proper web search
+- Include specific sources for each data point
+- Return ONLY the JSON object, no explanatory text
 """
     
     headers = {
@@ -170,17 +199,17 @@ Do NOT include any explanatory text before or after the JSON. Return ONLY the JS
     data = {
         "model": "sonar",
         "messages": [
-            {"role": "system", "content": "You are a precise financial analyst. You always find real data from web sources and never use placeholders or estimates. You search multiple sources until you find accurate information."},
+            {"role": "system", "content": "You are a precise financial analyst who ALWAYS finds real data from web sources. You never say 'data not available' for publicly traded companies. You search multiple sources and cite specific websites for each data point."},
             {"role": "user", "content": prompt}
         ],
-        "temperature": 0.1,
-        "max_tokens": 5000,
-        "search_domain_filter": ["finance.yahoo.com", "finance.naver.com", "investing.com", "marketwatch.com"],
+        "temperature": 0.05,  # Even lower for maximum factual accuracy
+        "max_tokens": 6000,
+        "search_domain_filter": ["finance.yahoo.com", "finance.naver.com", "investing.com", "marketwatch.com", "seekingalpha.com"],
         "return_citations": True
     }
     
     try:
-        response = requests.post(url, json=data, headers=headers, timeout=90)
+        response = requests.post(url, json=data, headers=headers, timeout=120)  # Increased timeout
         
         if response.status_code != 200:
             error_detail = f"Status: {response.status_code}"
@@ -221,7 +250,7 @@ Do NOT include any explanatory text before or after the JSON. Return ONLY the JS
             return None
             
     except requests.exceptions.Timeout:
-        st.error("⏱️ 요청 시간 초과 (90초). 다시 시도해주세요.")
+        st.error("⏱️ 요청 시간 초과 (120초). 다시 시도해주세요.")
         return None
     except requests.exceptions.RequestException as e:
         st.error(f"🌐 네트워크 오류: {str(e)}")
@@ -248,7 +277,7 @@ with tab1:
     
     col1, col2 = st.columns([3, 1])
     with col1:
-        ticker_input = st.text_input("종목명 또는 티커를 입력하세요", placeholder="예: 삼성전자, 005930, AAPL, 페트로브라스")
+        ticker_input = st.text_input("종목명 또는 티커를 입력하세요", placeholder="예: 삼성전자, 005930, AAPL, Pfizer, 페트로브라스")
     with col2:
         st.markdown("<br>", unsafe_allow_html=True)
         analyze_btn = st.button("🔍 분석 시작", type="primary", use_container_width=True)
@@ -272,7 +301,7 @@ with tab1:
                 analysis_result = existing['data']
             else:
                 st.warning(f"🔄 마지막 분석이 {days_old}일 전입니다. 새로운 분석을 진행합니다.")
-                with st.spinner('🤖 AI가 실제 재무 데이터를 검색하고 분석하고 있습니다... (약 30-60초 소요)'):
+                with st.spinner('🤖 AI가 실제 재무 데이터를 검색하고 분석하고 있습니다... (약 30-90초 소요)'):
                     analysis_result = analyze_stock_with_perplexity(ticker_input, API_KEY)
                     
                     if analysis_result:
@@ -284,7 +313,7 @@ with tab1:
                         save_analyses(analyses)
                         st.success("✅ 분석 완료 및 저장됨")
         else:
-            with st.spinner('🤖 AI가 실제 재무 데이터를 검색하고 분석하고 있습니다... (약 30-60초 소요)'):
+            with st.spinner('🤖 AI가 실제 재무 데이터를 검색하고 분석하고 있습니다... (약 30-90초 소요)'):
                 analysis_result = analyze_stock_with_perplexity(ticker_input, API_KEY)
                 
                 if analysis_result:
