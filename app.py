@@ -157,8 +157,9 @@ def analyze_stock_with_perplexity(ticker_or_name, api_key):
         "Content-Type": "application/json"
     }
     
+    # Use sonar model - the default, fast, and cost-effective option
     data = {
-        "model": "llama-3.1-sonar-large-128k-online",
+        "model": "sonar",
         "messages": [
             {"role": "system", "content": "당신은 금융 분석 전문가입니다. 최신 재무 데이터를 기반으로 정확한 분석을 JSON 형식으로만 제공합니다."},
             {"role": "user", "content": prompt}
@@ -245,6 +246,7 @@ if API_KEY:
     with st.sidebar:
         st.success(f"✅ API 키 설정 완료")
         st.caption(f"Key: {API_KEY[:8]}...{API_KEY[-4:]}")
+        st.info("💰 사용 모델: **sonar** (가장 저렴하고 빠른 모델)")
 
 # Main content
 tab1, tab2 = st.tabs(["📈 종목 분석", "🏆 전체 랭킹"])
@@ -278,7 +280,7 @@ with tab1:
                 analysis_result = existing['data']
             else:
                 st.warning(f"🔄 마지막 분석이 {days_old}일 전입니다. 새로운 분석을 진행합니다.")
-                with st.spinner('🤖 AI가 종목을 분석하고 있습니다... (약 30-60초 소요)'):
+                with st.spinner('🤖 AI가 종목을 분석하고 있습니다... (약 20-40초 소요)'):
                     analysis_result = analyze_stock_with_perplexity(ticker_input, API_KEY)
                     
                     if analysis_result:
@@ -290,7 +292,7 @@ with tab1:
                         save_analyses(analyses)
                         st.success("✅ 분석 완료 및 저장됨")
         else:
-            with st.spinner('🤖 AI가 종목을 분석하고 있습니다... (약 30-60초 소요)'):
+            with st.spinner('🤖 AI가 종목을 분석하고 있습니다... (약 20-40초 소요)'):
                 analysis_result = analyze_stock_with_perplexity(ticker_input, API_KEY)
                 
                 if analysis_result:
@@ -400,4 +402,4 @@ with tab2:
 
 # Footer
 st.markdown("---")
-st.caption("⚡ Powered by Perplexity AI | 데이터는 최대 7일간 캐시됩니다.")
+st.caption("⚡ Powered by Perplexity AI (sonar model) | 데이터는 최대 7일간 캐시됩니다.")
