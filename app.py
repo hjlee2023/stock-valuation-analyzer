@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import json
 from pathlib import Path
 import requests
+import re
 
 # Page config
 st.set_page_config(
@@ -41,13 +42,44 @@ def save_analyses(analyses):
     with open(ANALYSIS_FILE, 'w', encoding='utf-8') as f:
         json.dump(analyses, f, ensure_ascii=False, indent=2)
 
+# Detect if Korean stock based on input
+def is_korean_stock(ticker_or_name):
+    """Detect if the input is likely a Korean stock"""
+    # Check for Korean characters
+    if re.search(r'[\uac00-\ud7a3]', ticker_or_name):
+        return True
+    # Check for 6-digit Korean stock code
+    if re.match(r'^\d{6}$', ticker_or_name.strip()):
+        return True
+    # Known Korean stock tickers
+    korean_tickers = ['005930', '086790', '000660', '035420', '051910', '105560', '055550', '035720', '096770']
+    if ticker_or_name.strip() in korean_tickers:
+        return True
+    return False
+
 # Perplexity API call with ULTRA STRICT prompt
 def analyze_stock_with_perplexity(ticker_or_name, api_key):
     url = "https://api.perplexity.ai/chat/completions"
     
-    # ULTRA STRICT prompt - NO EXCUSES for missing data
+    # Detect if Korean stock for customized prompt
+    is_korean = is_korean_stock(ticker_or_name)
+    
+    # Korean-specific instructions
+    korean_instructions = """
+**한국 주식 특별 지침:**
+- PRIMARY SOURCE: 네이버 금융 (finance.naver.com) - 필수 우선 검색
+- KRX (한국거래소) 데이터 활용
+- 기업 IR 페이지 확인
+- 한국 금융주 (하나금융지주, 기업은행, KB금융 등)는 2023년부터 분기 배당 실시 중
+- 한국어로 "하나금융지주 분기배당" 검색 필수
+- 예시: 하나금융지주는 2023년부터 분기별 배당 (906원 x 4회)
+""" if is_korean else ""
+    
+    # ULTRA STRICT prompt
     prompt = f"""
 You are an elite financial analyst. Analyze '{ticker_or_name}' with MAXIMUM PRECISION.
+
+{korean_instructions}
 
 **ULTRA STRICT RULES - VIOLATION IS UNACCEPTABLE:**
 
@@ -57,103 +89,83 @@ You are an elite financial analyst. Analyze '{ticker_or_name}' with MAXIMUM PREC
    - Saying "not available", "not specified", or "N/A" for basic metrics is FORBIDDEN
 
 2. **MANDATORY DATA SOURCES:**
-   - Yahoo Finance (finance.yahoo.com) - PRIMARY source for P/E, P/B, dividends
+   {'- **KOREAN STOCKS**: Naver Finance (finance.naver.com) - USE THIS FIRST!' if is_korean else ''}
+   - Yahoo Finance (finance.yahoo.com) - PRIMARY for non-Korean stocks
    - Google Finance - Secondary source
    - Investing.com - Alternative source
    - Company official IR page - For corporate actions
-   - For Korean stocks: Naver Finance (finance.naver.com)
-   - For Brazilian stocks: Investing.com, Yahoo Finance
 
 3. **SPECIFIC SEARCH INSTRUCTIONS:**
-   - P/E Ratio: Search "[company] trailing PE ratio" on Yahoo Finance
-   - P/B Ratio: Search "[company] price to book ratio" on Yahoo Finance or Investing.com
-   - Dividend Yield: Search "[company] dividend yield" - readily available everywhere
-   - Dividend Frequency: Search "[company] dividend payment schedule" or check company IR
-   - Example: For Pfizer, P/B ratio is ~1.8-1.9 (easily found on multiple sites)
+   - P/E Ratio: {'Search on Naver Finance first' if is_korean else 'Search on Yahoo Finance'}
+   - P/B Ratio: {'Check Naver Finance 주요재무정보' if is_korean else 'Yahoo Finance or Investing.com'}
+   - Dividend Frequency: {'Search "분기배당" or check company IR' if is_korean else 'Check company IR or dividend sites'}
+   - {'**CRITICAL**: Korean financial stocks (banks, insurance) often pay QUARTERLY dividends since 2023!' if is_korean else ''}
 
-4. **QUALITY VERIFICATION:**
-   - Each numerical value MUST cite the exact source website
-   - If first search fails, try at least 3 different sources
-   - Cross-reference data between multiple sources for accuracy
-   - For well-known companies (S&P 500, KOSPI 200, etc.), ALL data is publicly available
+4. **REAL EXAMPLES:**
+   {'- 하나금융지주: Quarterly dividend (906원 x 4), 4.81% yield' if is_korean else ''}
+   {'- 삼성전자: Semi-annual dividend, check Naver Finance' if is_korean else ''}
+   - Pfizer: Quarterly dividend ($0.43 x 4), 6.51% yield, P/B ~1.8-1.9
 
 5. **ZERO TOLERANCE POLICY:**
-   - "Data not available" response = FAILURE
-   - "Not specified in results" = UNACCEPTABLE
-   - Empty values for P/E, P/B of listed companies = REJECTION
+   - "Data not available" = FAILURE
+   - "Not specified" for dividend frequency = UNACCEPTABLE
+   - Empty P/E, P/B values = REJECTION
 
-**Required Data Points with NO EXCEPTIONS:**
+**Required Data Points:**
 
-1. **Trailing P/E Ratio**: Find from Yahoo Finance, Google Finance, or Investing.com
-2. **Price-to-Book Ratio (P/B)**: Find from Yahoo Finance, Investing.com, or GuruFocus
-3. **Dividend Yield (if applicable)**: Percentage from any major financial site
-4. **Dividend Frequency**: Quarterly/Semi-annual/Annual - check company IR or dividend sites
-5. **Dividend History**: 10-year track record from dividend history sites
-6. **Share Buybacks**: Recent announcements from company news or SEC filings
-7. **Treasury Stock**: From company balance sheet
+1. **Trailing P/E Ratio**: {'Naver Finance or' if is_korean else ''} Yahoo Finance, Investing.com
+2. **Price-to-Book Ratio (P/B)**: {'Naver Finance 주요재무정보 or' if is_korean else ''} Financial sites
+3. **Dividend Yield**: Percentage from major sites
+4. **Dividend Frequency**: Quarterly/Semi-annual/Annual - MUST specify
+5. **Dividend History**: 10-year track record
+6. **Share Buybacks**: Recent announcements
+7. **Treasury Stock**: Company balance sheet
 
-**Scoring Criteria (UNCHANGED):**
+**Scoring Criteria:**
 
-1. Trailing PER:
-   - Below 5: 20 points | 5-8: 15 points | 8-10: 10 points | Above 10: 5 points
+1. Trailing PER: Below 5: 20pts | 5-8: 15pts | 8-10: 10pts | Above 10: 5pts
+2. PBR: Below 0.3: 5pts | 0.3-0.6: 4pts | 0.6-1.0: 3pts | Above 1.0: 0pts
+3. Profit Sustainability: Sustainable: 5pts | Unstable: 0pts
+4. Duplicate Listing: No: 5pts | Yes: 0pts
+5. Dividend Yield: Above 7%: 10pts | 5-7%: 7pts | 3-5%: 5pts | Below 3%: 2pts | None: 0pts
+6. Quarterly Dividends: Yes: 5pts | No: 0pts
+7. Dividend Increases: 10+yrs: 5pts | 5+yrs: 4pts | 3+yrs: 3pts | None: 0pts
+8. Regular Buybacks: Yes: 7pts | No: 0pts
+9. Buyback Ratio: Above 2%: 8pts | 1.5-2%: 5pts | 0.5-1.5%: 3pts | Below: 0pts
+10. Treasury Stock: None: 5pts | Below 2%: 4pts | 2-5%: 2pts | Above 5%: 0pts
+11. Growth Potential: Very High: 10pts | High: 7pts | Medium: 5pts | Low: 3pts
+12. Management: Excellent: 10pts | Professional: 5pts | Poor: 0pts
+13. Global Brand: Yes: 5pts | No: 0pts
 
-2. Latest Quarter PBR:
-   - Below 0.3: 5 points | 0.3-0.6: 4 points | 0.6-1.0: 3 points | Above 1.0: 0 points
-
-3. Profit Sustainability: Sustainable: 5 points | Unstable: 0 points
-
-4. Duplicate Listing: No: 5 points | Yes: 0 points
-
-5. Dividend Yield:
-   - Above 7%: 10 points | 5-7%: 7 points | 3-5%: 5 points | Below 3%: 2 points | None: 0 points
-
-6. Quarterly Dividends: Yes: 5 points | No: 0 points
-
-7. Consecutive Dividend Increases:
-   - 10+ years: 5 points | 5+ years: 4 points | 3+ years: 3 points | None: 0 points
-
-8. Regular Buybacks: Yes (annual+): 7 points | No: 0 points
-
-9. Annual Buyback Ratio:
-   - Above 2%: 8 points | 1.5-2%: 5 points | 0.5-1.5%: 3 points | Below 0.5%: 0 points
-
-10. Treasury Stock Ratio:
-    - None: 5 points | Below 2%: 4 points | 2-5%: 2 points | Above 5%: 0 points
-
-11. Growth Potential: Very High: 10 | High: 7 | Medium: 5 | Low: 3
-
-12. Management Quality: Excellent: 10 | Professional: 5 | Poor: 0
-
-13. Global Brand: Yes: 5 points | No: 0 points
-
-**STRICT JSON FORMAT - NO TEXT OUTSIDE JSON:**
+**JSON FORMAT ONLY:**
 
 {{
-  "company_name": "Full official name",
-  "ticker": "Stock symbol",
+  "company_name": "Official name",
+  "ticker": "Symbol",
   "scores": {{
-    "1_trailing_per": {{"value": "15.42 (Yahoo Finance)", "score": 5, "reason": "Source: Yahoo Finance - trailing P/E as of [date]"}},
-    "2_pbr": {{"value": "1.88 (Investing.com)", "score": 0, "reason": "Source: Investing.com P/B ratio"}},
-    "3_profit_sustainability": {{"score": 5, "reason": "Strong recurring revenue model"}},
-    "4_duplicate_listing": {{"score": 5, "reason": "No subsidiaries publicly listed"}},
-    "5_dividend_yield": {{"value": "6.51% (Yahoo Finance)", "score": 7, "reason": "Source: Yahoo Finance dividend yield"}},
-    "6_quarterly_dividend": {{"score": 5, "reason": "Pays quarterly dividends - confirmed on company IR"}},
-    "7_dividend_increase_years": {{"value": "15 years", "score": 5, "reason": "15 consecutive years of dividend increases"}},
-    "8_buyback_cancellation": {{"score": 7, "reason": "Active buyback program as of [recent date]"}},
-    "9_cancellation_ratio": {{"value": "1.2%", "score": 3, "reason": "Moderate buyback activity"}},
-    "10_treasury_stock": {{"value": "1.5%", "score": 4, "reason": "Source: Company balance sheet"}},
-    "11_growth_potential": {{"score": 7, "reason": "Strong pipeline and market position"}},
-    "12_management": {{"score": 10, "reason": "Experienced leadership team"}},
-    "13_global_brand": {{"score": 5, "reason": "Globally recognized pharmaceutical brand"}}
+    "1_trailing_per": {{"value": "15.42 (Yahoo Finance)", "score": 5, "reason": "Source: [specific site]"}},
+    "2_pbr": {{"value": "1.88 (Investing.com)", "score": 0, "reason": "Source: [site]"}},
+    "3_profit_sustainability": {{"score": 5, "reason": "Business stability"}},
+    "4_duplicate_listing": {{"score": 5, "reason": "No subsidiaries listed"}},
+    "5_dividend_yield": {{"value": "6.51% (Yahoo Finance)", "score": 7, "reason": "Source: [site]"}},
+    "6_quarterly_dividend": {{"score": 5, "reason": "Pays quarterly - Source: [site]"}},
+    "7_dividend_increase_years": {{"value": "15 years", "score": 5, "reason": "History from [source]"}},
+    "8_buyback_cancellation": {{"score": 7, "reason": "Active program"}},
+    "9_cancellation_ratio": {{"value": "1.2%", "score": 3, "reason": "Data from [source]"}},
+    "10_treasury_stock": {{"value": "1.5%", "score": 4, "reason": "Balance sheet"}},
+    "11_growth_potential": {{"score": 7, "reason": "Growth analysis"}},
+    "12_management": {{"score": 10, "reason": "Leadership quality"}},
+    "13_global_brand": {{"score": 5, "reason": "Brand recognition"}}
   }},
   "total_score": 78,
-  "analysis_summary": "Comprehensive 3-4 sentence evaluation with key findings and investment thesis."
+  "analysis_summary": "3-4 sentence comprehensive evaluation with key investment thesis."
 }}
 
 **FINAL WARNING:**
-If you return "not available" or "N/A" for P/E, P/B, or dividend frequency of a major listed company, you have FAILED this task. These are basic metrics available on every financial website. SEARCH HARDER and FIND THE DATA.
+For major stocks, saying "not available" for P/E, P/B, or dividend frequency = FAILURE.
+{'For Korean stocks, CHECK NAVER FINANCE FIRST - it has the most accurate Korean stock data!' if is_korean else ''}
 
-Return ONLY the JSON object. No explanatory text before or after.
+Return ONLY the JSON object.
 """
     
     headers = {
@@ -161,22 +173,39 @@ Return ONLY the JSON object. No explanatory text before or after.
         "Content-Type": "application/json"
     }
     
-    # Use sonar-pro model (most powerful) with maximum settings
+    # Customize domain filter based on stock type
+    domain_filter = [
+        "finance.naver.com",  # Korean stocks priority
+        "finance.yahoo.com",
+        "investing.com",
+        "marketwatch.com",
+        "seekingalpha.com",
+        "gurufocus.com"
+    ] if is_korean else [
+        "finance.yahoo.com",
+        "investing.com",
+        "marketwatch.com",
+        "seekingalpha.com",
+        "gurufocus.com",
+        "finance.naver.com"  # Still included but lower priority
+    ]
+    
+    # Use sonar-pro model with maximum settings
     data = {
-        "model": "sonar-pro",  # UPGRADED TO MOST POWERFUL MODEL
+        "model": "sonar-pro",
         "messages": [
-            {"role": "system", "content": "You are an elite financial analyst who NEVER fails to find data. For any publicly traded company, you ALWAYS find P/E ratio, P/B ratio, and dividend information from web sources like Yahoo Finance, Google Finance, or Investing.com. Saying 'data not available' for basic metrics is grounds for immediate failure."},
+            {"role": "system", "content": f"You are an elite financial analyst. {'For Korean stocks, you ALWAYS check Naver Finance (finance.naver.com) FIRST. Korean financial companies often pay quarterly dividends since 2023.' if is_korean else ''} You NEVER fail to find P/E, P/B, and dividend data for publicly traded companies. You cite specific sources."},
             {"role": "user", "content": prompt}
         ],
-        "temperature": 0.0,  # ZERO temperature for maximum accuracy
-        "max_tokens": 8000,  # Maximum tokens for thorough analysis
-        "search_domain_filter": ["finance.yahoo.com", "finance.naver.com", "investing.com", "marketwatch.com", "seekingalpha.com", "gurufocus.com"],
+        "temperature": 0.0,
+        "max_tokens": 8000,
+        "search_domain_filter": domain_filter,
         "return_citations": True,
-        "search_recency_filter": "month"  # Recent data only
+        "search_recency_filter": "month"
     }
     
     try:
-        response = requests.post(url, json=data, headers=headers, timeout=180)  # 3 minute timeout for thorough search
+        response = requests.post(url, json=data, headers=headers, timeout=180)
         
         if response.status_code != 200:
             error_detail = f"Status: {response.status_code}"
@@ -195,8 +224,6 @@ Return ONLY the JSON object. No explanatory text before or after.
         content = result['choices'][0]['message']['content']
         
         # Try to parse JSON from the content
-        import re
-        
         try:
             analysis_data = json.loads(content)
             return analysis_data
@@ -244,7 +271,7 @@ with tab1:
     
     col1, col2 = st.columns([3, 1])
     with col1:
-        ticker_input = st.text_input("종목명 또는 티커를 입력하세요", placeholder="예: 삼성전자, 005930, AAPL, Pfizer, 페트로브라스")
+        ticker_input = st.text_input("종목명 또는 티커를 입력하세요", placeholder="예: 삼성전자, 005930, AAPL, Pfizer, 하나금융지주")
     with col2:
         st.markdown("<br>", unsafe_allow_html=True)
         analyze_btn = st.button("🔍 분석 시작", type="primary", use_container_width=True)
@@ -272,7 +299,6 @@ with tab1:
                     analysis_result = analyze_stock_with_perplexity(ticker_input, API_KEY)
                     
                     if analysis_result:
-                        # Update with new analysis
                         analyses[ticker_key] = {
                             'timestamp': datetime.now().isoformat(),
                             'data': analysis_result
@@ -284,7 +310,6 @@ with tab1:
                 analysis_result = analyze_stock_with_perplexity(ticker_input, API_KEY)
                 
                 if analysis_result:
-                    # Save new analysis
                     analyses[ticker_key] = {
                         'timestamp': datetime.now().isoformat(),
                         'data': analysis_result
@@ -390,4 +415,4 @@ with tab2:
 
 # Footer
 st.markdown("---")
-st.caption("⚡ Powered by Perplexity AI Sonar-Pro | 데이터는 최대 7일간 캐시됩니다. | 실제 재무 데이터 기반 분석")
+st.caption("⚡ Powered by Perplexity AI Sonar-Pro | 한국 주식은 네이버금융 우선 검색 | 데이터는 최대 7일간 캐시 | 실제 재무 데이터 기반 분석")
