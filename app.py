@@ -42,6 +42,52 @@ def save_analyses(analyses):
     with open(ANALYSIS_FILE, 'w', encoding='utf-8') as f:
         json.dump(analyses, f, ensure_ascii=False, indent=2)
 
+# Validate and recalculate total score
+def validate_and_fix_scores(analysis_data):
+    """Validate scores and recalculate total if necessary"""
+    if not analysis_data or 'scores' not in analysis_data:
+        return analysis_data
+    
+    scores = analysis_data['scores']
+    calculated_total = 0
+    
+    # Score keys and their max values
+    score_config = {
+        '1_trailing_per': 20,
+        '2_pbr': 5,
+        '3_profit_sustainability': 5,
+        '4_duplicate_listing': 5,
+        '5_dividend_yield': 10,
+        '6_quarterly_dividend': 5,
+        '7_dividend_increase_years': 5,
+        '8_buyback_cancellation': 7,
+        '9_cancellation_ratio': 8,
+        '10_treasury_stock': 5,
+        '11_growth_potential': 10,
+        '12_management': 10,
+        '13_global_brand': 5
+    }
+    
+    # Validate and sum up scores
+    for key, max_score in score_config.items():
+        if key in scores:
+            score_value = scores[key].get('score', 0)
+            # Ensure score is within valid range
+            if score_value < 0:
+                score_value = 0
+            elif score_value > max_score:
+                score_value = max_score
+            
+            scores[key]['score'] = score_value
+            calculated_total += score_value
+    
+    # If total_score is wildly incorrect (> 100 or negative), fix it
+    if 'total_score' not in analysis_data or analysis_data['total_score'] > 100 or analysis_data['total_score'] < 0:
+        analysis_data['total_score'] = calculated_total
+        st.warning(f"⚠️ 총점이 비정상적이어서 재계산했습니다: {calculated_total}점")
+    
+    return analysis_data
+
 # Detect if Korean stock based on input
 def is_korean_stock(ticker_or_name):
     """Detect if the input is likely a Korean stock"""
@@ -75,95 +121,69 @@ def analyze_stock_with_perplexity(ticker_or_name, api_key):
 - 예시: 하나금융지주는 2023년부터 분기별 배당 (906원 x 4회)
 """ if is_korean else ""
     
-    # ULTRA STRICT prompt
+    # ULTRA STRICT prompt with EXPLICIT score calculation requirement
     prompt = f"""
 You are an elite financial analyst. Analyze '{ticker_or_name}' with MAXIMUM PRECISION.
 
 {korean_instructions}
 
-**ULTRA STRICT RULES - VIOLATION IS UNACCEPTABLE:**
+**ULTRA STRICT RULES:**
 
-1. **ALL DATA MUST BE FOUND:**
-   - For ANY publicly traded company, P/E and P/B ratios ALWAYS exist
-   - For dividend-paying companies, dividend frequency (quarterly/annual) ALWAYS exists
-   - Saying "not available", "not specified", or "N/A" for basic metrics is FORBIDDEN
+1. **ALL DATA MUST BE FOUND** - No "N/A" for basic metrics
+2. **MANDATORY SOURCES**: {'Naver Finance (finance.naver.com) FIRST for Korean stocks' if is_korean else 'Yahoo Finance, Investing.com, Google Finance'}
+3. **SCORE CALCULATION IS CRITICAL**: You MUST correctly sum all 13 individual scores to get total_score
 
-2. **MANDATORY DATA SOURCES:**
-   {'- **KOREAN STOCKS**: Naver Finance (finance.naver.com) - USE THIS FIRST!' if is_korean else ''}
-   - Yahoo Finance (finance.yahoo.com) - PRIMARY for non-Korean stocks
-   - Google Finance - Secondary source
-   - Investing.com - Alternative source
-   - Company official IR page - For corporate actions
+**Scoring Criteria (MAX 100 POINTS):**
 
-3. **SPECIFIC SEARCH INSTRUCTIONS:**
-   - P/E Ratio: {'Search on Naver Finance first' if is_korean else 'Search on Yahoo Finance'}
-   - P/B Ratio: {'Check Naver Finance 주요재무정보' if is_korean else 'Yahoo Finance or Investing.com'}
-   - Dividend Frequency: {'Search "분기배당" or check company IR' if is_korean else 'Check company IR or dividend sites'}
-   - {'**CRITICAL**: Korean financial stocks (banks, insurance) often pay QUARTERLY dividends since 2023!' if is_korean else ''}
+1. Trailing PER (MAX 20): Below 5→20pts | 5-8→15pts | 8-10→10pts | >10→5pts
+2. PBR (MAX 5): <0.3→5pts | 0.3-0.6→4pts | 0.6-1.0→3pts | >1.0→0pts
+3. Profit Sustainability (MAX 5): Sustainable→5pts | Unstable→0pts
+4. Duplicate Listing (MAX 5): No→5pts | Yes→0pts
+5. Dividend Yield (MAX 10): >7%→10pts | 5-7%→7pts | 3-5%→5pts | <3%→2pts | None→0pts
+6. Quarterly Dividends (MAX 5): Yes→5pts | No→0pts
+7. Dividend Increases (MAX 5): 10+yrs→5pts | 5+yrs→4pts | 3+yrs→3pts | None→0pts
+8. Regular Buybacks (MAX 7): Yes→7pts | No→0pts
+9. Buyback Ratio (MAX 8): >2%→8pts | 1.5-2%→5pts | 0.5-1.5%→3pts | <0.5%→0pts
+10. Treasury Stock (MAX 5): None→5pts | <2%→4pts | 2-5%→2pts | >5%→0pts
+11. Growth Potential (MAX 10): Very High→10pts | High→7pts | Medium→5pts | Low→3pts
+12. Management (MAX 10): Excellent→10pts | Professional→5pts | Poor→0pts
+13. Global Brand (MAX 5): Yes→5pts | No→0pts
 
-4. **REAL EXAMPLES:**
-   {'- 하나금융지주: Quarterly dividend (906원 x 4), 4.81% yield' if is_korean else ''}
-   {'- 삼성전자: Semi-annual dividend, check Naver Finance' if is_korean else ''}
-   - Pfizer: Quarterly dividend ($0.43 x 4), 6.51% yield, P/B ~1.8-1.9
+**CRITICAL: SCORE CALCULATION**
+total_score = sum of all 13 individual scores (MUST be between 0-100)
 
-5. **ZERO TOLERANCE POLICY:**
-   - "Data not available" = FAILURE
-   - "Not specified" for dividend frequency = UNACCEPTABLE
-   - Empty P/E, P/B values = REJECTION
-
-**Required Data Points:**
-
-1. **Trailing P/E Ratio**: {'Naver Finance or' if is_korean else ''} Yahoo Finance, Investing.com
-2. **Price-to-Book Ratio (P/B)**: {'Naver Finance 주요재무정보 or' if is_korean else ''} Financial sites
-3. **Dividend Yield**: Percentage from major sites
-4. **Dividend Frequency**: Quarterly/Semi-annual/Annual - MUST specify
-5. **Dividend History**: 10-year track record
-6. **Share Buybacks**: Recent announcements
-7. **Treasury Stock**: Company balance sheet
-
-**Scoring Criteria:**
-
-1. Trailing PER: Below 5: 20pts | 5-8: 15pts | 8-10: 10pts | Above 10: 5pts
-2. PBR: Below 0.3: 5pts | 0.3-0.6: 4pts | 0.6-1.0: 3pts | Above 1.0: 0pts
-3. Profit Sustainability: Sustainable: 5pts | Unstable: 0pts
-4. Duplicate Listing: No: 5pts | Yes: 0pts
-5. Dividend Yield: Above 7%: 10pts | 5-7%: 7pts | 3-5%: 5pts | Below 3%: 2pts | None: 0pts
-6. Quarterly Dividends: Yes: 5pts | No: 0pts
-7. Dividend Increases: 10+yrs: 5pts | 5+yrs: 4pts | 3+yrs: 3pts | None: 0pts
-8. Regular Buybacks: Yes: 7pts | No: 0pts
-9. Buyback Ratio: Above 2%: 8pts | 1.5-2%: 5pts | 0.5-1.5%: 3pts | Below: 0pts
-10. Treasury Stock: None: 5pts | Below 2%: 4pts | 2-5%: 2pts | Above 5%: 0pts
-11. Growth Potential: Very High: 10pts | High: 7pts | Medium: 5pts | Low: 3pts
-12. Management: Excellent: 10pts | Professional: 5pts | Poor: 0pts
-13. Global Brand: Yes: 5pts | No: 0pts
-
-**JSON FORMAT ONLY:**
+**JSON FORMAT - EXACT STRUCTURE:**
 
 {{
-  "company_name": "Official name",
-  "ticker": "Symbol",
+  "company_name": "Official company name",
+  "ticker": "Stock symbol",
   "scores": {{
-    "1_trailing_per": {{"value": "15.42 (Yahoo Finance)", "score": 5, "reason": "Source: [specific site]"}},
-    "2_pbr": {{"value": "1.88 (Investing.com)", "score": 0, "reason": "Source: [site]"}},
-    "3_profit_sustainability": {{"score": 5, "reason": "Business stability"}},
+    "1_trailing_per": {{"value": "15.42 (Source)", "score": 5, "reason": "Source: Yahoo Finance"}},
+    "2_pbr": {{"value": "10.1 (Source)", "score": 0, "reason": "Source: Investing.com"}},
+    "3_profit_sustainability": {{"score": 5, "reason": "Strong recurring revenue"}},
     "4_duplicate_listing": {{"score": 5, "reason": "No subsidiaries listed"}},
-    "5_dividend_yield": {{"value": "6.51% (Yahoo Finance)", "score": 7, "reason": "Source: [site]"}},
-    "6_quarterly_dividend": {{"score": 5, "reason": "Pays quarterly - Source: [site]"}},
-    "7_dividend_increase_years": {{"value": "15 years", "score": 5, "reason": "History from [source]"}},
+    "5_dividend_yield": {{"value": "6.5%", "score": 7, "reason": "Source: Yahoo Finance"}},
+    "6_quarterly_dividend": {{"score": 5, "reason": "Quarterly payments"}},
+    "7_dividend_increase_years": {{"value": "15 years", "score": 5, "reason": "15 consecutive increases"}},
     "8_buyback_cancellation": {{"score": 7, "reason": "Active program"}},
-    "9_cancellation_ratio": {{"value": "1.2%", "score": 3, "reason": "Data from [source]"}},
-    "10_treasury_stock": {{"value": "1.5%", "score": 4, "reason": "Balance sheet"}},
-    "11_growth_potential": {{"score": 7, "reason": "Growth analysis"}},
-    "12_management": {{"score": 10, "reason": "Leadership quality"}},
-    "13_global_brand": {{"score": 5, "reason": "Brand recognition"}}
+    "9_cancellation_ratio": {{"value": "1.2%", "score": 3, "reason": "Moderate activity"}},
+    "10_treasury_stock": {{"value": "1.5%", "score": 4, "reason": "Low holdings"}},
+    "11_growth_potential": {{"score": 7, "reason": "Strong pipeline"}},
+    "12_management": {{"score": 10, "reason": "Experienced team"}},
+    "13_global_brand": {{"score": 5, "reason": "Globally recognized"}}
   }},
-  "total_score": 78,
-  "analysis_summary": "3-4 sentence comprehensive evaluation with key investment thesis."
+  "total_score": 68,
+  "analysis_summary": "Comprehensive 3-4 sentence evaluation."
 }}
 
-**FINAL WARNING:**
-For major stocks, saying "not available" for P/E, P/B, or dividend frequency = FAILURE.
-{'For Korean stocks, CHECK NAVER FINANCE FIRST - it has the most accurate Korean stock data!' if is_korean else ''}
+**EXAMPLE CALCULATION:**
+If scores are: 5+0+5+5+7+5+5+7+3+4+7+10+5 = 68 points (NOT 1000000000!)
+
+**FINAL CHECKS:**
+- Each individual score MUST be ≤ its maximum
+- total_score MUST equal sum of 13 scores
+- total_score MUST be between 0-100
+- Include specific data sources for all numerical values
 
 Return ONLY the JSON object.
 """
@@ -175,7 +195,7 @@ Return ONLY the JSON object.
     
     # Customize domain filter based on stock type
     domain_filter = [
-        "finance.naver.com",  # Korean stocks priority
+        "finance.naver.com",
         "finance.yahoo.com",
         "investing.com",
         "marketwatch.com",
@@ -187,14 +207,14 @@ Return ONLY the JSON object.
         "marketwatch.com",
         "seekingalpha.com",
         "gurufocus.com",
-        "finance.naver.com"  # Still included but lower priority
+        "finance.naver.com"
     ]
     
-    # Use sonar-pro model with maximum settings
+    # Use sonar-pro model
     data = {
         "model": "sonar-pro",
         "messages": [
-            {"role": "system", "content": f"You are an elite financial analyst. {'For Korean stocks, you ALWAYS check Naver Finance (finance.naver.com) FIRST. Korean financial companies often pay quarterly dividends since 2023.' if is_korean else ''} You NEVER fail to find P/E, P/B, and dividend data for publicly traded companies. You cite specific sources."},
+            {"role": "system", "content": f"You are an elite financial analyst. {'For Korean stocks, check Naver Finance FIRST.' if is_korean else ''} You ALWAYS find real data and CORRECTLY calculate total_score by summing all 13 individual scores. Total must be 0-100."},
             {"role": "user", "content": prompt}
         ],
         "temperature": 0.0,
@@ -224,24 +244,28 @@ Return ONLY the JSON object.
         content = result['choices'][0]['message']['content']
         
         # Try to parse JSON from the content
+        analysis_data = None
         try:
             analysis_data = json.loads(content)
-            return analysis_data
         except:
             json_match = re.search(r'```(?:json)?\s*({[\s\S]*?})\s*```', content)
             if json_match:
                 analysis_data = json.loads(json_match.group(1))
-                return analysis_data
-            
-            json_match = re.search(r'\{[\s\S]*\}', content)
-            if json_match:
-                analysis_data = json.loads(json_match.group())
-                return analysis_data
-            
+            else:
+                json_match = re.search(r'\{[\s\S]*\}', content)
+                if json_match:
+                    analysis_data = json.loads(json_match.group())
+        
+        if not analysis_data:
             st.error("❌ JSON 파싱 실패")
             with st.expander("🔍 AI 응답 내용 보기"):
                 st.code(content)
             return None
+        
+        # CRITICAL: Validate and fix scores
+        analysis_data = validate_and_fix_scores(analysis_data)
+        
+        return analysis_data
             
     except requests.exceptions.Timeout:
         st.error("⏱️ 요청 시간 초과 (180초). 다시 시도해주세요.")
@@ -293,6 +317,8 @@ with tab1:
             if days_old < 7:
                 st.info(f"📋 기존 분석 결과 사용 (분석일: {last_analysis_date.strftime('%Y-%m-%d %H:%M')})")
                 analysis_result = existing['data']
+                # Re-validate old data
+                analysis_result = validate_and_fix_scores(analysis_result)
             else:
                 st.warning(f"🔄 마지막 분석이 {days_old}일 전입니다. 새로운 분석을 진행합니다.")
                 with st.spinner('🤖 최고 성능 AI로 실제 재무 데이터를 검색하고 분석하고 있습니다... (약 60-120초 소요)'):
@@ -325,7 +351,8 @@ with tab1:
             st.markdown("---")
             col1, col2, col3 = st.columns(3)
             with col2:
-                st.metric("총점", f"{analysis_result['total_score']}점", "/100점")
+                total = analysis_result.get('total_score', 0)
+                st.metric("총점", f"{total}점", "/100점")
             
             # Summary
             st.markdown("### 📝 종합 평가")
@@ -376,6 +403,9 @@ with tab2:
         ranking_data = []
         for ticker, data in analyses.items():
             analysis = data['data']
+            # Validate scores before displaying
+            analysis = validate_and_fix_scores(analysis)
+            
             ranking_data.append({
                 '순위': 0,
                 '종목명': analysis.get('company_name', ticker),
