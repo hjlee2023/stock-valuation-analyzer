@@ -17,6 +17,19 @@ DATA_DIR = Path("analysis_data")
 DATA_DIR.mkdir(exist_ok=True)
 ANALYSIS_FILE = DATA_DIR / "analyses.json"
 
+# Get API key from Streamlit secrets or environment variable
+def get_api_key():
+    try:
+        # Try Streamlit secrets first (for cloud deployment)
+        return st.secrets["PERPLEXITY_API_KEY"]
+    except:
+        # Fallback to environment variable (for local development)
+        api_key = os.getenv("PERPLEXITY_API_KEY")
+        if not api_key:
+            st.error("⚠️ API 키가 설정되지 않았습니다. 관리자에게 문의하세요.")
+            st.stop()
+        return api_key
+
 # Load existing analyses
 def load_analyses():
     if ANALYSIS_FILE.exists():
@@ -169,12 +182,8 @@ def analyze_stock_with_perplexity(ticker_or_name, api_key):
 st.title("📊 저평가 우량주 자동 분석기")
 st.markdown("---")
 
-# Sidebar
-with st.sidebar:
-    st.header("⚙️ 설정")
-    api_key = st.text_input("Perplexity API Key", type="password", help="API 키를 입력하세요")
-    st.markdown("---")
-    st.info("💡 종목명 또는 티커를 입력하면 자동으로 분석됩니다.")
+# Get API key
+API_KEY = get_api_key()
 
 # Main content
 tab1, tab2 = st.tabs(["📈 종목 분석", "🏆 전체 랭킹"])
@@ -190,93 +199,90 @@ with tab1:
         analyze_btn = st.button("🔍 분석 시작", type="primary", use_container_width=True)
     
     if analyze_btn and ticker_input:
-        if not api_key:
-            st.error("⚠️ Perplexity API 키를 먼저 입력해주세요!")
-        else:
-            # Load existing analyses
-            analyses = load_analyses()
+        # Load existing analyses
+        analyses = load_analyses()
+        
+        # Check if analysis exists and is recent
+        ticker_key = ticker_input.strip().upper()
+        existing = analyses.get(ticker_key)
+        
+        if existing:
+            last_analysis_date = datetime.fromisoformat(existing['timestamp'])
+            days_old = (datetime.now() - last_analysis_date).days
             
-            # Check if analysis exists and is recent
-            ticker_key = ticker_input.strip().upper()
-            existing = analyses.get(ticker_key)
-            
-            if existing:
-                last_analysis_date = datetime.fromisoformat(existing['timestamp'])
-                days_old = (datetime.now() - last_analysis_date).days
-                
-                if days_old < 7:
-                    st.info(f"📋 기존 분석 결과 (분석일: {last_analysis_date.strftime('%Y-%m-%d')})")
-                    analysis_result = existing['data']
-                else:
-                    st.warning(f"🔄 마지막 분석이 {days_old}일 전입니다. 새로운 분석을 진행합니다.")
-                    with st.spinner('🤖 AI가 종목을 분석하고 있습니다...'):
-                        analysis_result = analyze_stock_with_perplexity(ticker_input, api_key)
-                        
-                        if analysis_result:
-                            # Update with new analysis
-                            analyses[ticker_key] = {
-                                'timestamp': datetime.now().isoformat(),
-                                'data': analysis_result
-                            }
-                            save_analyses(analyses)
+            if days_old < 7:
+                st.info(f"📋 기존 분석 결과 (분석일: {last_analysis_date.strftime('%Y-%m-%d')})")
+                analysis_result = existing['data']
             else:
+                st.warning(f"🔄 마지막 분석이 {days_old}일 전입니다. 새로운 분석을 진행합니다.")
                 with st.spinner('🤖 AI가 종목을 분석하고 있습니다...'):
-                    analysis_result = analyze_stock_with_perplexity(ticker_input, api_key)
+                    analysis_result = analyze_stock_with_perplexity(ticker_input, API_KEY)
                     
                     if analysis_result:
-                        # Save new analysis
+                        # Update with new analysis
                         analyses[ticker_key] = {
                             'timestamp': datetime.now().isoformat(),
                             'data': analysis_result
                         }
                         save_analyses(analyses)
+        else:
+            with st.spinner('🤖 AI가 종목을 분석하고 있습니다...'):
+                analysis_result = analyze_stock_with_perplexity(ticker_input, API_KEY)
+                
+                if analysis_result:
+                    # Save new analysis
+                    analyses[ticker_key] = {
+                        'timestamp': datetime.now().isoformat(),
+                        'data': analysis_result
+                    }
+                    save_analyses(analyses)
+        
+        # Display results
+        if analysis_result:
+            st.success(f"✅ 분석 완료: {analysis_result.get('company_name', ticker_input)}")
             
-            # Display results
-            if analysis_result:
-                st.success(f"✅ 분석 완료: {analysis_result.get('company_name', ticker_input)}")
-                
-                # Total score display
-                st.markdown("---")
-                col1, col2, col3 = st.columns(3)
-                with col2:
-                    st.metric("총점", f"{analysis_result['total_score']}점", "/100점")
-                
-                # Summary
-                st.markdown("### 📝 종합 평가")
-                st.info(analysis_result.get('analysis_summary', '종합 평가 없음'))
-                
-                # Detailed scores
-                st.markdown("### 📊 세부 점수")
-                
-                scores = analysis_result.get('scores', {})
-                
-                criteria = [
-                    ("1. Trailing PER", "1_trailing_per", 20),
-                    ("2. 직전 분기 PBR", "2_pbr", 5),
-                    ("3. 이익 지속 가능성", "3_profit_sustainability", 5),
-                    ("4. 중복 상장 여부", "4_duplicate_listing", 5),
-                    ("5. 배당수익률", "5_dividend_yield", 10),
-                    ("6. 분기 배당 실시", "6_quarterly_dividend", 5),
-                    ("7. 배당 연속 인상 연수", "7_dividend_increase_years", 5),
-                    ("8. 자사주 매입 및 소각", "8_buyback_cancellation", 7),
-                    ("9. 연간 소각 비율", "9_cancellation_ratio", 8),
-                    ("10. 자사주 보유 비율", "10_treasury_stock", 5),
-                    ("11. 미래 성장 잠재력", "11_growth_potential", 10),
-                    ("12. 기업 경영", "12_management", 10),
-                    ("13. 세계적 브랜드", "13_global_brand", 5)
-                ]
-                
-                for title, key, max_score in criteria:
-                    if key in scores:
-                        item = scores[key]
-                        score = item.get('score', 0)
-                        reason = item.get('reason', '')
-                        value = item.get('value', '')
-                        
-                        with st.expander(f"{title}: {score}/{max_score}점"):
-                            if value:
-                                st.write(f"**값:** {value}")
-                            st.write(f"**평가:** {reason}")
+            # Total score display
+            st.markdown("---")
+            col1, col2, col3 = st.columns(3)
+            with col2:
+                st.metric("총점", f"{analysis_result['total_score']}점", "/100점")
+            
+            # Summary
+            st.markdown("### 📝 종합 평가")
+            st.info(analysis_result.get('analysis_summary', '종합 평가 없음'))
+            
+            # Detailed scores
+            st.markdown("### 📊 세부 점수")
+            
+            scores = analysis_result.get('scores', {})
+            
+            criteria = [
+                ("1. Trailing PER", "1_trailing_per", 20),
+                ("2. 직전 분기 PBR", "2_pbr", 5),
+                ("3. 이익 지속 가능성", "3_profit_sustainability", 5),
+                ("4. 중복 상장 여부", "4_duplicate_listing", 5),
+                ("5. 배당수익률", "5_dividend_yield", 10),
+                ("6. 분기 배당 실시", "6_quarterly_dividend", 5),
+                ("7. 배당 연속 인상 연수", "7_dividend_increase_years", 5),
+                ("8. 자사주 매입 및 소각", "8_buyback_cancellation", 7),
+                ("9. 연간 소각 비율", "9_cancellation_ratio", 8),
+                ("10. 자사주 보유 비율", "10_treasury_stock", 5),
+                ("11. 미래 성장 잠재력", "11_growth_potential", 10),
+                ("12. 기업 경영", "12_management", 10),
+                ("13. 세계적 브랜드", "13_global_brand", 5)
+            ]
+            
+            for title, key, max_score in criteria:
+                if key in scores:
+                    item = scores[key]
+                    score = item.get('score', 0)
+                    reason = item.get('reason', '')
+                    value = item.get('value', '')
+                    
+                    with st.expander(f"{title}: {score}/{max_score}점"):
+                        if value:
+                            st.write(f"**값:** {value}")
+                        st.write(f"**평가:** {reason}")
 
 with tab2:
     st.header("🏆 전체 종목 랭킹")
